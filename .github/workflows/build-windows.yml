@@ -1,0 +1,74 @@
+name: Build kojiPDFviewer MSI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Load app version
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'VERSION must be major.minor.patch' }
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+          "MSI_NAME=kojiPDFviewer_Setup_$version.msi" >> $env:GITHUB_ENV
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt "nuitka>=2.8.9" ordered-set zstandard
+      - name: Check app imports
+        run: python -c "import main; print('App imports OK')"
+      - name: Build standalone app
+        shell: cmd
+        run: build_nuitka.bat
+      - name: Sign app executable if configured
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+        run: ./scripts/sign-file.ps1 -Path main.dist/kojiPDFviewer.exe
+      - name: Install WiX Toolset 3
+        shell: pwsh
+        run: choco install wixtoolset --version=3.14.1.20250415 --yes --no-progress
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wix = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
+          $heat = Join-Path $wix 'heat.exe'
+          $candle = Join-Path $wix 'candle.exe'
+          $light = Join-Path $wix 'light.exe'
+          foreach ($tool in @($heat, $candle, $light)) { if (!(Test-Path $tool)) { throw "Missing WiX tool: $tool" } }
+          New-Item -ItemType Directory -Force installer\obj, installer\output | Out-Null
+          & $heat dir main.dist -nologo -srd -sreg -gg -cg AppFiles -dr INSTALLFOLDER -var var.SourceDir -out installer\obj\HarvestedFiles.wxs
+          if ($LASTEXITCODE -ne 0) { throw 'WiX heat failed' }
+          & $candle -nologo -arch x64 "-dSourceDir=$pwd\main.dist" "-dProjectDir=$pwd" "-dAppVersion=$env:APP_VERSION" -out installer\obj\ installer\kojiPDFviewer.wxs installer\obj\HarvestedFiles.wxs
+          if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed' }
+          & $light -nologo -out "installer\output\$env:MSI_NAME" installer\obj\kojiPDFviewer.wixobj installer\obj\HarvestedFiles.wixobj
+          if ($LASTEXITCODE -ne 0) { throw 'WiX light failed' }
+          if (!(Test-Path "installer\output\$env:MSI_NAME")) { throw 'MSI missing' }
+      - name: Sign MSI if configured
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+        run: ./scripts/sign-file.ps1 -Path "installer/output/$env:MSI_NAME"
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: installer/output/*.msi
+          if-no-files-found: error
+          retention-days: 30

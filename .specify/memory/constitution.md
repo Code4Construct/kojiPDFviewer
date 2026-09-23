@@ -23,7 +23,7 @@ Source, Markdown, and configuration text MUST be read and written as UTF-8 unles
 ## Project Constraints
 
 - Target: Windows desktop, Python 3.12, PySide6, PyMuPDF, SQLite FTS5, optional Outlook desktop COM integration.
-- Distribution: A manually dispatched GitHub Action builds a Nuitka standalone app and packages it with WiX. Publishing checks the MSI with VirusTotal and creates a tagged Release only after a clean result.
+- Distribution: A push to `master` builds a Nuitka standalone app and packages it with WiX. A separate manually dispatched release workflow takes a release name, reuses the successful MSI artifact from the same commit, checks it with VirusTotal, and creates a tagged Release only after a clean result.
 - Never commit real mail PDFs, generated indexes, API keys, signing keys, or machine-local Spec Kit state.
 - Preserve the current user's changes when editing source or release files.
 
