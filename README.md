@@ -1,4 +1,4 @@
-# メールPDF閲覧アプリ
+# kojiPDFviewer
 
 「KojiPDF」などが出力する、複数のメールを1つに結合した“メール束PDF”を快適に閲覧するためのデスクトップアプリです。
 メール一覧をカード形式で表示し、全文検索・ページジャンプ・添付ファイルへのクイックアクセス・印刷を行えます。
@@ -56,7 +56,7 @@ git commit -m "Prepare v0.1.0 release"
 git push origin HEAD
 ```
 
-GitHub の **Actions → Build Windows MSI → Run workflow** で `publish_release` を選びます。`false` は試作で、MSI を Actions の artifact として保存します。試作 MSI を確認した後、`true` で再実行すると VirusTotal を経て GitHub Release を作成します。Release の `v<VERSION>` タグも Actions が作成するため、手動のタグ push は不要です。同じ版の Release が既にある場合は停止するので、次回は先に `VERSION` を増やします。生成物は `MailPDFViewer_Setup_<VERSION>.msi` です。MSI は管理者権限で全ユーザー向けにインストールされ、スタートメニューにショートカットを作成します。
+GitHub の **Actions → Build kojiPDFviewer MSI → Run workflow** で `publish_release` を選びます。`false` は試作で、MSI を Actions の artifact として保存します。試作 MSI を確認した後、`true` で再実行すると VirusTotal を経て GitHub Release を作成します。Release の `v<VERSION>` タグも Actions が作成するため、手動のタグ push は不要です。同じ版の Release が既にある場合は停止するので、次回は先に `VERSION` を増やします。生成物は `kojiPDFviewer_Setup_<VERSION>.msi` です。MSI は管理者権限で全ユーザー向けにインストールされ、スタートメニューにショートカットを作成します。
 
 ## 構成
 

@@ -1,28 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="MailPDFViewer" Language="1041" Version="$(var.AppVersion)" Manufacturer="Code4Construct" UpgradeCode="{6E471D23-E601-4BBA-92C3-9EAA0A3EAC41}">
+  <Product Id="*" Name="kojiPDFviewer" Language="1041" Version="$(var.AppVersion)" Manufacturer="Code4Construct" UpgradeCode="{6E471D23-E601-4BBA-92C3-9EAA0A3EAC41}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
-    <Icon Id="AppIcon.ico" SourceFile="$(var.ProjectDir)\assets\icons\MailPDFViewer.ico" />
+    <Icon Id="AppIcon.ico" SourceFile="$(var.ProjectDir)\assets\icons\kojiPDFviewer.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
-    <Feature Id="MainFeature" Title="MailPDFViewer" Level="1">
+    <Feature Id="MainFeature" Title="kojiPDFviewer" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="MailPDFViewer" />
+        <Directory Id="INSTALLFOLDER" Name="kojiPDFviewer" />
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="MailPDFViewer" />
+        <Directory Id="ApplicationProgramsFolder" Name="kojiPDFviewer" />
       </Directory>
     </Directory>
     <DirectoryRef Id="ApplicationProgramsFolder">
-      <Component Id="StartMenuShortcut" Guid="{5D196FC6-1075-4D3D-AAC3-775DA25214F0}">
-        <Shortcut Id="StartMenuLink" Name="MailPDFViewer" Target="[INSTALLFOLDER]MailPDFViewer.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" />
+      <Component Id="StartMenuShortcut" Guid="{8A90FA29-0F5D-47A7-90D2-93019474A72F}">
+        <Shortcut Id="StartMenuLink" Name="kojiPDFviewer" Target="[INSTALLFOLDER]kojiPDFviewer.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" />
         <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
-        <RegistryValue Root="HKLM" Key="Software\Code4Construct\MailPDFViewer" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Code4Construct\kojiPDFviewer" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
   </Product>

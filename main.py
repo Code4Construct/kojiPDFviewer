@@ -1,4 +1,4 @@
-"""メールPDF閲覧アプリ
+"""kojiPDFviewer
 
 KojiPDFが出力した「メール束PDF」を読み込み、メール一覧(差出人・件名・宛先・日時・
 添付・本文冒頭)をカード形式で表示し、全文検索・ページジャンプ・PDF内ハイライトを行う。
@@ -1723,7 +1723,7 @@ class WelcomeWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("メールPDF閲覧アプリ")
+        self.setWindowTitle("kojiPDFviewer")
         screen = QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None
         if avail is not None:
@@ -1731,7 +1731,12 @@ class MainWindow(QMainWindow):
         else:
             self.resize(1440, 900)
 
-        self.settings = QSettings("ukawa", "MailPDFViewer")
+        self.settings = QSettings("ukawa", "kojiPDFviewer")
+        # 旧アプリ名で保存された履歴・お気に入りを初回起動時に引き継ぐ。
+        legacy_settings = QSettings("ukawa", "MailPDFViewer")
+        for key in ("recentFiles", "favoriteFiles"):
+            if not self.settings.contains(key) and legacy_settings.contains(key):
+                self.settings.setValue(key, legacy_settings.value(key))
         self.setAcceptDrops(True)
         self._page_synced_tab: BasePdfTab | None = None
         self._sidebar_visible = True  # メール一覧・しおり一覧の表示/非表示(全画面・通常表示どちらでも共通)
@@ -2228,6 +2233,7 @@ QTabBar::tab:selected { background: #FFFFFF; border: 1px solid #E9EBEF; border-b
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName("kojiPDFviewer")
     app.setStyleSheet(APP_STYLESHEET)
     win = MainWindow()
     win.showMaximized()

@@ -1,4 +1,4 @@
-# MailPDFViewer Constitution
+# kojiPDFviewer Constitution
 
 ## Core Principles
 
