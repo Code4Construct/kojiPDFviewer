@@ -27,7 +27,7 @@ jobs:
           "APP_VERSION=$version" >> $env:GITHUB_ENV
           "MSI_NAME=kojiPDFviewer_Setup_$version.msi" >> $env:GITHUB_ENV
       - name: Install build dependencies
-        run: python -m pip install -r requirements.txt "nuitka>=2.8.9" ordered-set zstandard
+        run: python -m pip install -r requirements.txt "nuitka==4.2.2" ordered-set zstandard
       - name: Check app imports
         run: python -c "import main; print('App imports OK')"
       - name: Build standalone app
