@@ -24,6 +24,8 @@
 
 ## セットアップ
 
+アプリの現行動作を日本語で読む場合は [日本語仕様書](docs/日本語仕様書.md) を参照してください。開発では [SDD 開発手順](docs/SDD開発手順.md) に従って GitHub Spec Kit の Codex スキルを使い、要求 → 計画 → タスク → 実装の順に記録します。初期設定は `.specify/`、開発原則は `.specify/memory/constitution.md`、現行動作の基準は `specs/001-current-behavior-baseline/spec.md` にあります。新機能は `$speckit-specify` から始めます。
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -37,21 +39,24 @@ pip install -r requirements.txt
 python main.py [PDFファイルパス]
 ```
 
-## 配布用exe化(PyInstaller)
+## Windows MSI の配布
 
-Pythonが入っていないPCでも動かせる単体exeを作れます。
+GitHub Actions で Nuitka の standalone アプリを作り、WiX Toolset 3 で MSI に収めます。Actions の手動実行で公開を選ぶと MSI を VirusTotal に送信し、解析で `malicious=0` と `suspicious=0` を確認できた場合だけ GitHub Release を公開します。検出、API エラー、解析の時間切れは公開を止めます。
 
-```bash
-pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name "MailPDFViewer" ^
-  --exclude-module pandas --exclude-module numpy --exclude-module PIL ^
-  --exclude-module matplotlib --exclude-module scipy --exclude-module numba ^
-  --exclude-module pyarrow --exclude-module IPython --exclude-module jupyter ^
-  --exclude-module notebook --exclude-module pytest ^
-  main.py
+初回設定:
+
+1. GitHub リポジトリの **Settings → Secrets and variables → Actions** に `VIRUSTOTAL_API_KEY` を Repository secret として登録します。公開 VirusTotal API に送った MSI は第三者にも共有され得るため、社外秘の内容は含めないでください。
+2. **Settings → Actions → General** で GitHub Actions を有効にします。Release の作成に使う `GITHUB_TOKEN` にはワークフローで `contents: write` を指定しています。組織のポリシーで書き込みが禁止されている場合は許可が必要です。
+3. コード署名をする場合は、同じ場所に `WINDOWS_CODESIGN_PFX_BASE64` (PFX ファイルの Base64) と `WINDOWS_CODESIGN_PASSWORD` を両方登録します。これで exe と MSI に署名します。未設定なら署名せず、片方だけ設定した場合はビルドを停止します。
+4. `VERSION` を `0.1.0` のような 3 桁の番号にし、変更をコミットして既定のブランチに push します。
+
+```powershell
+git add .
+git commit -m "Prepare v0.1.0 release"
+git push origin HEAD
 ```
 
-`dist/MailPDFViewer.exe` が生成されます(サイズ縮小のため、アプリが使っていない重量級パッケージ(pandas/numpy等がPython環境に別途入っている場合に誤って同梱されるのを防ぐため)を明示的に除外しています)。`build/`・`dist/`・`*.spec` は`.gitignore`済みのため、都度手元でビルドしてください。
+GitHub の **Actions → Build Windows MSI → Run workflow** で `publish_release` を選びます。`false` は試作で、MSI を Actions の artifact として保存します。試作 MSI を確認した後、`true` で再実行すると VirusTotal を経て GitHub Release を作成します。Release の `v<VERSION>` タグも Actions が作成するため、手動のタグ push は不要です。同じ版の Release が既にある場合は停止するので、次回は先に `VERSION` を増やします。生成物は `MailPDFViewer_Setup_<VERSION>.msi` です。MSI は管理者権限で全ユーザー向けにインストールされ、スタートメニューにショートカットを作成します。
 
 ## 構成
 

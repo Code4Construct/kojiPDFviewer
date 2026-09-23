@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 
 # PDFとインデックスDBはテスト用の実データ(個人情報を含む)のため公開しない
 *.pdf
@@ -9,3 +10,8 @@ __pycache__/
 build/
 dist/
 *.spec
+main.dist/
+main.build/
+main.onefile-build/
+installer/obj/
+installer/output/
