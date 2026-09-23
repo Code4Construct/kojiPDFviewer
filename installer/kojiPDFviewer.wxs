@@ -22,7 +22,7 @@
       <Component Id="StartMenuShortcut" Guid="{8A90FA29-0F5D-47A7-90D2-93019474A72F}">
         <Shortcut Id="StartMenuLink" Name="kojiPDFviewer" Target="[INSTALLFOLDER]kojiPDFviewer.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" />
         <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
-        <RegistryValue Root="HKLM" Key="Software\Code4Construct\kojiPDFviewer" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\Code4Construct\kojiPDFviewer" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
   </Product>

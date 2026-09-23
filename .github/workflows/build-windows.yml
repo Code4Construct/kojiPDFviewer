@@ -46,11 +46,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $wix = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
+          $wix = $null
+          $heatCommand = Get-Command heat.exe -ErrorAction SilentlyContinue
+          if ($heatCommand) { $wix = Split-Path $heatCommand.Source -Parent }
+          if (!$wix) {
+            $roots = @(${env:ProgramFiles(x86)}, $env:ProgramFiles) | Where-Object { $_ -and (Test-Path $_) }
+            foreach ($root in $roots) {
+              $found = Get-ChildItem -Path $root -Filter heat.exe -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -like '*WiX*' } | Select-Object -First 1
+              if ($found) { $wix = $found.DirectoryName; break }
+            }
+          }
+          if (!$wix) { throw 'WiX heat.exe was not found' }
           $heat = Join-Path $wix 'heat.exe'
           $candle = Join-Path $wix 'candle.exe'
           $light = Join-Path $wix 'light.exe'
           foreach ($tool in @($heat, $candle, $light)) { if (!(Test-Path $tool)) { throw "Missing WiX tool: $tool" } }
+          Write-Host "Using WiX tools from: $wix"
           New-Item -ItemType Directory -Force installer\obj, installer\output | Out-Null
           & $heat dir main.dist -nologo -srd -sreg -gg -cg AppFiles -dr INSTALLFOLDER -var var.SourceDir -out installer\obj\HarvestedFiles.wxs
           if ($LASTEXITCODE -ne 0) { throw 'WiX heat failed' }
