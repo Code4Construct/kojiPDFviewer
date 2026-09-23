@@ -36,9 +36,9 @@ jobs:
             throw "Publish from the default branch ($env:DEFAULT_BRANCH) only"
           }
           if ($env:PUBLISH_RELEASE -eq 'true') {
-            git ls-remote --exit-code --tags origin "refs/tags/v$version" | Out-Null
-            if ($LASTEXITCODE -eq 0) { throw "Tag v$version already exists. Increment VERSION before publishing again." }
-            if ($LASTEXITCODE -ne 2) { throw 'Could not check existing tags on origin' }
+            $existingTag = git ls-remote --tags origin "refs/tags/v$version"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not check existing tags on origin' }
+            if ($existingTag) { throw "Tag v$version already exists. Increment VERSION before publishing again." }
           }
           "APP_VERSION=$version" >> $env:GITHUB_ENV
           "MSI_NAME=MailPDFViewer_Setup_$version.msi" >> $env:GITHUB_ENV
@@ -112,7 +112,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v$env:APP_VERSION"
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Release already exists: $tag. Increment VERSION before publishing again." }
           gh release create $tag "installer/output/$env:MSI_NAME" --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "MailPDFViewer $tag" --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed' }
