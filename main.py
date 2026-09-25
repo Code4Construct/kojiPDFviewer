@@ -777,27 +777,10 @@ class BasePdfTab(QWidget):
     def set_sidebar_visible(self, visible: bool):
         self.sidebar.setVisible(visible)
 
-    def _request_toggle_sidebar(self):
-        """一覧の下にある「一覧を隠す」ボタンから呼ばれる。実際の表示状態はMainWindow側で
-        一元管理しているため、そちらのトグル処理を呼び出す(Ctrl+B/右クリックと共通)。"""
+    def _request_mode_switch(self):
         window = self.window()
-        if isinstance(window, QMainWindow) and hasattr(window, "_toggle_sidebar"):
-            window._toggle_sidebar()
-
-    def _build_collapse_bar(self) -> QWidget:
-        """一覧の下に置く「一覧を隠す」ボタンのバー。"""
-        bar = QWidget()
-        bar.setObjectName("collapseBar")
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(12, 6, 12, 6)
-        layout.addStretch(1)
-        button = QToolButton()
-        button.setText("一覧を隠す")
-        button.setToolTip("メール一覧・しおり一覧を隠す (Ctrl+Bで再表示)")
-        button.clicked.connect(self._request_toggle_sidebar)
-        layout.addWidget(button)
-        layout.addStretch(1)
-        return bar
+        if isinstance(window, MainWindow):
+            window._switch_current_mode()
 
     def _show_pdf_context_menu(self, pos):
         """PDF表示部分の右クリックメニュー。全画面表示中はしおり呼び出し・全画面解除の導線が
@@ -1098,6 +1081,10 @@ class PdfTab(BasePdfTab):
         sort_layout.addWidget(self.group_button)
 
         sort_layout.addStretch(1)
+        mode_button = QToolButton()
+        mode_button.setText("しおり一覧へ")
+        mode_button.clicked.connect(self._request_mode_switch)
+        sort_layout.addWidget(mode_button)
         self.count_label = QLabel()
         self.count_label.setObjectName("countLabel")
         sort_layout.addWidget(self.count_label)
@@ -1121,7 +1108,6 @@ class PdfTab(BasePdfTab):
         self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_view.customContextMenuRequested.connect(self._show_context_menu)
         left_layout.addWidget(self.list_view)
-        left_layout.addWidget(self._build_collapse_bar())
         self.sidebar = left
         splitter.addWidget(left)
 
@@ -1401,6 +1387,10 @@ class DocumentPdfTab(BasePdfTab):
         info_layout.setContentsMargins(12, 8, 12, 8)
         info_layout.addWidget(QLabel("しおり一覧"))
         info_layout.addStretch(1)
+        mode_button = QToolButton()
+        mode_button.setText("メール一覧へ")
+        mode_button.clicked.connect(self._request_mode_switch)
+        info_layout.addWidget(mode_button)
         expand_button = QToolButton()
         expand_button.setText("すべて展開")
         expand_button.clicked.connect(lambda: self.list_view.expandAll())
@@ -1428,7 +1418,6 @@ class DocumentPdfTab(BasePdfTab):
         self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_view.customContextMenuRequested.connect(self._show_context_menu)
         left_layout.addWidget(self.list_view)
-        left_layout.addWidget(self._build_collapse_bar())
         self.sidebar = left
         splitter.addWidget(left)
 
@@ -1780,6 +1769,12 @@ class MainWindow(QMainWindow):
 
         style = self.style()
 
+        self.sidebar_button = QToolButton()
+        self.sidebar_button.setText("一覧を隠す")
+        self.sidebar_button.setToolTip("メール一覧・しおり一覧を切り替え (Ctrl+B)")
+        self.sidebar_button.clicked.connect(self._toggle_sidebar)
+        toolbar.addWidget(self.sidebar_button)
+
         open_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton),
                                "PDFを開く", self)
         open_action.triggered.connect(self.open_pdf_dialog)
@@ -2054,6 +2049,31 @@ class MainWindow(QMainWindow):
     def _current_tab(self) -> "BasePdfTab | WelcomeWidget | None":
         return self.tabs.currentWidget()
 
+    def _switch_current_mode(self):
+        old_tab = self._current_tab()
+        if not isinstance(old_tab, BasePdfTab):
+            return
+        tab_cls = DocumentPdfTab if isinstance(old_tab, PdfTab) else PdfTab
+        new_tab = tab_cls(old_tab.pdf_path)
+        new_tab.current_query = old_tab.current_query
+        new_tab.set_zoom_mode(old_tab.pdf_view.zoomMode())
+        if not new_tab.load(status_cb=self.status.showMessage):
+            new_tab.document.close()
+            new_tab.deleteLater()
+            return
+
+        page = old_tab.current_page()
+        index = self.tabs.indexOf(old_tab)
+        title = self.tabs.tabText(index)
+        tooltip = self.tabs.tabToolTip(index)
+        new_tab.pdf_view.pageNavigator().jump(page, QPointF(0, 0))
+        self.tabs.insertTab(index, new_tab, title)
+        self.tabs.setTabToolTip(index, tooltip)
+        self.tabs.setCurrentWidget(new_tab)
+        self.tabs.removeTab(self.tabs.indexOf(old_tab))
+        old_tab.document.close()
+        old_tab.deleteLater()
+
     def _unread_suffix(self, tab: BasePdfTab) -> str:
         count = tab.unread_count()
         return f" (未読 {count})" if count else ""
@@ -2172,6 +2192,8 @@ class MainWindow(QMainWindow):
         self.toolbar.setVisible(not full)
         self.status.setVisible(not full)
         tab = self._current_tab()
+        self.sidebar_button.setText("一覧を隠す" if self._sidebar_visible else "一覧を表示")
+        self.sidebar_button.setEnabled(isinstance(tab, BasePdfTab))
         if isinstance(tab, BasePdfTab):
             tab.set_sidebar_visible(self._sidebar_visible)
 
@@ -2186,8 +2208,8 @@ class MainWindow(QMainWindow):
             self._apply_fullscreen_chrome()
             if not self.isMaximized() and not self.isFullScreen():
                 # 最大化を解除した直後は、以前のウィンドウサイズ・位置(別のモニターに
-                # 合わせたものかもしれない)に戻るため、一覧下部の「一覧を隠す」ボタン
-                # などが画面外に出ないよう現在の画面内に収まるよう調整する。
+                # 合わせたものかもしれない)に戻るため、ウィンドウが画面外に
+                # 出ないよう現在の画面内に収まるよう調整する。
                 # サイズと位置の復元はOS側で別々の非同期処理として行われ、この
                 # イベント処理の直後やresizeEventの時点ではまだ両方とも確定していない
                 # ことがあるため、少し待ってから(両方の復元が完了した後に)実行する。
@@ -2222,7 +2244,6 @@ QStatusBar { background: #F7F8FA; color: #6B7078; }
 QListView, QTreeView { background: #FFFFFF; border: none; outline: 0; }
 QSplitter::handle { background: #E9EBEF; }
 #sortBar { background: #FBFCFD; border-bottom: 1px solid #E9EBEF; }
-#collapseBar { background: #FBFCFD; border-top: 1px solid #E9EBEF; }
 #pageLabel { color: #2A2D33; font-weight: 600; }
 #countLabel { color: #6B7078; }
 QTabWidget::pane { border: none; }

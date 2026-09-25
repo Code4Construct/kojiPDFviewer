@@ -80,8 +80,9 @@ END;
 """
 
 
-def index_path_for(pdf_path: str) -> str:
-    return pdf_path + ".index.sqlite3"
+def index_path_for(pdf_path: str, mode: str = "mail") -> str:
+    suffix = ".document.index.sqlite3" if mode == "document" else ".index.sqlite3"
+    return pdf_path + suffix
 
 
 def _pdf_signature(pdf_path: str) -> str:
@@ -174,7 +175,7 @@ def open_or_build(pdf_path: str, mode: str = "mail", force_rebuild: bool = False
     mode は "mail"(メール束PDF) か "document"(一般資料PDF、しおり階層閲覧)。
     既存インデックスのmode・PDF署名がずれていれば自動的に再構築する。
     """
-    db_path = index_path_for(pdf_path)
+    db_path = index_path_for(pdf_path, mode)
     sig = _pdf_signature(pdf_path)
     builder = _build if mode == "mail" else _build_document
 

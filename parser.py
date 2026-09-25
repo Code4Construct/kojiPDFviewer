@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
-import fitz  # PyMuPDF
+import pymupdf
 
 LABELS = ["件名", "差出人", "宛先", "CC", "添付ファイル", "受信日時", "送信日時"]
 
@@ -103,7 +103,7 @@ def _split_toc_title(title: str) -> tuple[str, int, int]:
     return title, 1, 1
 
 
-def build_toc_tree(doc: fitz.Document) -> list[TocNode]:
+def build_toc_tree(doc: pymupdf.Document) -> list[TocNode]:
     toc = doc.get_toc(simple=False)
     roots: list[TocNode] = []
     stack: list[TocNode] = []  # インデックス0 = level1の直近ノード
@@ -218,7 +218,7 @@ def _parse_title_datetime(name: str) -> tuple[datetime | None, str]:
 
 
 def extract_mails(pdf_path: str) -> list[Mail]:
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     roots = build_toc_tree(doc)
 
     mails: list[Mail] = []
@@ -291,7 +291,7 @@ def detect_mode(pdf_path: str) -> str:
     ルートしおりの大半が "名前_開始ページ_ページ数" 形式で、かつ先頭メールの1ページ目に
     件名/差出人/受信日時などのラベルが揃っていればメールPDFとみなす。それ以外は資料PDF。
     """
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     try:
         toc = doc.get_toc(simple=False)
         if not toc:
@@ -320,7 +320,7 @@ def extract_document_sections(pdf_path: str) -> list[DocSection]:
     子を持つ見出し(章など)は本文全文を持たせない
     (全文はその葉ノード側で個別にインデックスされるため、二重に持たせて肥大化させない)。
     """
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     try:
         toc = doc.get_toc(simple=False)
         total_pages = doc.page_count
@@ -367,9 +367,9 @@ def extract_document_sections(pdf_path: str) -> list[DocSection]:
 
 def save_page_range(src_path: str, dest_path: str, start_page: int, end_page: int):
     """1始まりのページ範囲[start_page, end_page]を、元PDFのままの品質で別ファイルに書き出す。"""
-    src = fitz.open(src_path)
+    src = pymupdf.open(src_path)
     try:
-        out = fitz.open()
+        out = pymupdf.open()
         try:
             out.insert_pdf(src, from_page=start_page - 1, to_page=end_page - 1)
             out.save(dest_path)

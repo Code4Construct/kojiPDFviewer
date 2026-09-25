@@ -31,7 +31,7 @@ pip install -r requirements.txt
 ```
 
 - Python 3.12 で動作確認
-- PySide6 (Qt for Python) / PyMuPDF (fitz) を使用
+- PySide6 (Qt for Python) / PyMuPDF (pymupdf) を使用
 
 ## 実行
 
