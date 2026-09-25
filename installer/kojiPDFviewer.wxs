@@ -6,14 +6,33 @@
     <MediaTemplate EmbedCab="yes" />
     <Icon Id="AppIcon.ico" SourceFile="$(var.ProjectDir)\assets\icons\kojiPDFviewer.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.ProjectDir)\installer\license.rtf" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open README.md" />
+    <Property Id="WixShellExecTarget" Value="[#ReadmeFile]" />
+    <CustomAction Id="OpenReadme" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
+    <UI>
+      <UIRef Id="WixUI_InstallDir" />
+      <UIRef Id="WixUI_ErrorProgressText" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenReadme">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
+    </UI>
     <Feature Id="MainFeature" Title="kojiPDFviewer" Level="1">
       <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="DocumentationFiles" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="kojiPDFviewer" />
+        <Directory Id="INSTALLFOLDER" Name="kojiPDFviewer">
+          <Component Id="DocumentationFiles" Guid="{EE378AF7-5BE2-44ED-9B4C-2FECE8C3036E}">
+            <File Id="ReadmeFile" Source="$(var.ProjectDir)\README.md" KeyPath="yes" />
+            <File Id="LicenseFile" Source="$(var.ProjectDir)\LICENSE" />
+            <File Id="ThirdPartyNoticesFile" Source="$(var.ProjectDir)\THIRD_PARTY_NOTICES.md" />
+          </Component>
+        </Directory>
       </Directory>
+      <Directory Id="DesktopFolder" />
       <Directory Id="ProgramMenuFolder">
         <Directory Id="ApplicationProgramsFolder" Name="kojiPDFviewer" />
       </Directory>
@@ -23,6 +42,12 @@
         <Shortcut Id="StartMenuLink" Name="kojiPDFviewer" Target="[INSTALLFOLDER]kojiPDFviewer.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" />
         <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\Code4Construct\kojiPDFviewer" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="{F90E57B1-76C7-421F-B301-FCCF602BEF0B}">
+        <Shortcut Id="DesktopLink" Name="kojiPDFviewer" Target="[INSTALLFOLDER]kojiPDFviewer.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" />
+        <RegistryValue Root="HKCU" Key="Software\Code4Construct\kojiPDFviewer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
   </Product>

@@ -24,6 +24,14 @@
 
 ## セットアップ
 
+### ライセンスと依存ライブラリ
+
+kojiPDFviewer 本体は [GNU AGPL v3](LICENSE) で提供します。商用利用も可能ですが、改変・再配布・ネットワーク経由の提供を行う場合は、AGPL v3 と使用する依存物のライセンス条件を確認してください。正式な条件は `LICENSE` の英語原文に従います。配布時には、利用者が対応するソースコードへアクセスできる方法を用意してください。
+
+主な依存物は PyMuPDF / MuPDF（AGPL v3 または Artifex 商用ライセンス）、PySide6 と shiboken6（PyPI 配布版は LGPL v3 / GPL v2 / GPL v3 の選択肢）、pywin32（パッケージメタデータ上は PSF、個別ファイルの表示も要確認）です。使用する Qt PDF は LGPL v3 / GPL v2 / 商用ライセンスの選択肢があり、PDFium などの第三者コードも含まれます。ビルドに使う Nuitka 4.2.2 は AGPL v3 で、対象となる生成物にはランタイム例外があります。各ライブラリには本体と別の条件が適用されます。版、一次資料、配布前に確認する事項は [第三者ライセンス一覧](THIRD_PARTY_NOTICES.md)を参照してください。
+
+MSI には `LICENSE` と `THIRD_PARTY_NOTICES.md` を同梱し、インストール時に AGPL v3 の全文を表示します。依存物は `requirements.txt` で下限を指定しているため、実際に配布する版と同梱ファイルのライセンス表示はビルドごとに確認してください。
+
 アプリの現行動作を日本語で読む場合は [日本語仕様書](docs/日本語仕様書.md) を参照してください。開発では [SDD 開発手順](docs/SDD開発手順.md) に従って GitHub Spec Kit の Codex スキルを使い、要求 → 計画 → タスク → 実装の順に記録します。初期設定は `.specify/`、開発原則は `.specify/memory/constitution.md`、現行動作の基準は `specs/001-current-behavior-baseline/spec.md` にあります。新機能は `$speckit-specify` から始めます。
 
 ```bash
@@ -48,19 +56,19 @@ python main.py [PDFファイルパス]
 1. GitHub リポジトリの **Settings → Secrets and variables → Actions** に `VIRUSTOTAL_API_KEY` を Repository secret として登録します。公開 VirusTotal API に送った MSI は第三者にも共有され得るため、社外秘の内容は含めないでください。
 2. **Settings → Actions → General** で GitHub Actions を有効にします。Release の作成に使う `GITHUB_TOKEN` にはワークフローで `contents: write` を指定しています。組織のポリシーで書き込みが禁止されている場合は許可が必要です。
 3. コード署名をする場合は、同じ場所に `WINDOWS_CODESIGN_PFX_BASE64` (PFX ファイルの Base64) と `WINDOWS_CODESIGN_PASSWORD` を両方登録します。これで exe と MSI に署名します。未設定なら署名せず、片方だけ設定した場合はビルドを停止します。
-4. `VERSION` を `0.1.0` のような 3 桁の番号にし、変更をコミットして `master` に push します。
+4. `VERSION` を `0.2.0` のような 3 桁の番号にし、変更をコミットして `master` に push します。
 
 ```powershell
 git add .
-git commit -m "Prepare v0.1.0 release"
+git commit -m "Prepare v0.2.0 release"
 git push origin HEAD
 ```
 
 1. GitHub の **Actions → Build kojiPDFviewer MSI** で push による実行が成功したことを確認します。Artifacts の `windows-msi` から `kojiPDFviewer_Setup_<VERSION>.msi` をダウンロードし、インストール・起動を確認します。
-2. **Actions → Release kojiPDFviewer MSI → Run workflow** を開き、`master` を選んでリリース名を入力します。例: `kojiPDFviewer v0.1.0`。緑色の **Run workflow** を押します。
+2. **Actions → Release kojiPDFviewer MSI → Run workflow** を開き、`master` を選んでリリース名を入力します。例: `kojiPDFviewer v0.2.0`。緑色の **Run workflow** を押します。
 3. Release Action が同じコミットの成功した MSI を再利用し、VirusTotal 確認後に `v<VERSION>` タグと GitHub Release を作成します。手動でタグを push する必要はありません。
 
-Release Action の開始前に新しいコミットを push した場合は、そのコミットのビルドが成功するまで待ちます。同じ版のタグが既にある場合は公開を止めるため、次回の配布時には先に `VERSION` を増やしてください。ビルド artifact の保存期間は 30 日です。MSI は管理者権限で全ユーザー向けにインストールされ、スタートメニューにショートカットを作成します。
+Release Action の開始前に新しいコミットを push した場合は、そのコミットのビルドが成功するまで待ちます。同じ版のタグが既にある場合は公開を止めるため、次回の配布時には先に `VERSION` を増やしてください。ビルド artifact の保存期間は 30 日です。MSI は管理者権限で全ユーザー向けにインストールされ、スタートメニューとデスクトップにショートカットを作成します。
 
 ## 構成
 

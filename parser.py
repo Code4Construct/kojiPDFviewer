@@ -180,6 +180,54 @@ def _collect_leaves(node: TocNode) -> list[TocNode]:
     return leaves
 
 
+def _message_attachment_key(name: str) -> str | None:
+    """.msg/.eml の表示名から、しおりの件名部分と照合する文字列を得る。"""
+    if not name.lower().endswith((".msg", ".eml")):
+        return None
+    key = re.sub(r"^\d+_", "", name[:-4].strip())
+    key = re.sub(r"\s*[（(]\s*[\d,.]+\s*(?:KB|MB|GB)\s*[)）]\s*$", "", key,
+                 flags=re.IGNORECASE)
+    return key.strip()
+
+
+def _attachment_refs(names: list[str], attach_node: TocNode | None) -> list[AttachmentRef]:
+    if attach_node is None:
+        return [AttachmentRef(name=n, start_page=None) for n in names]
+
+    leaves = _collect_leaves(attach_node)
+    has_message = any(_message_attachment_key(name) is not None for name in names)
+    if not has_message and len(leaves) == len(names):
+        # 従来形式のPDFでは、末端しおりと添付欄の順序対応を維持する。
+        return [AttachmentRef(name=n, start_page=leaf.start_page, end_page=leaf.end_page)
+                for n, leaf in zip(names, leaves)]
+
+    candidates = attach_node.children
+    matched: list[TocNode | None] = []
+    for name in names:
+        key = _message_attachment_key(name)
+        if key is not None:
+            hits = [node for node in candidates if key and key in node.name]
+        else:
+            ordinal = re.match(r"^(\d+)_", name)
+            hits = []
+            if ordinal:
+                for node in candidates:
+                    node_ordinal = re.match(r"^(\d+)_", node.name)
+                    if node_ordinal and node_ordinal.group(1) == ordinal.group(1):
+                        hits.append(node)
+            if not hits:
+                stem = name.rsplit(".", 1)[0]
+                hits = [node for node in candidates if stem and stem in node.name]
+        matched.append(hits[0] if len(hits) == 1 else None)
+
+    # 同じしおりに複数の添付が紐付く場合も一意ではない。
+    counts = {id(node): sum(other is node for other in matched) for node in matched if node is not None}
+    return [AttachmentRef(name=name, start_page=node.start_page, end_page=node.end_page)
+            if node is not None and counts[id(node)] == 1
+            else AttachmentRef(name=name, start_page=None)
+            for name, node in zip(names, matched)]
+
+
 def _short_name(address_field: str) -> str:
     """'表示名 <email>' 形式から表示名部分だけを取り出す。表示名が無ければメールアドレスそのもの。"""
     first = address_field.split("/")[0].strip()
@@ -238,8 +286,6 @@ def extract_mails(pdf_path: str) -> list[Mail]:
         )
 
         attach_node = _find_child(node, "添付")
-        leaves = _collect_leaves(attach_node) if attach_node else []
-
         if header["添付ファイル"]:
             # ヘッダー欄は拡張子付きファイル名を持つため、しおり名より優先する。
             names = [a.strip() for a in header["添付ファイル"].split("/") if a.strip()]
@@ -248,12 +294,7 @@ def extract_mails(pdf_path: str) -> list[Mail]:
         else:
             names = []
 
-        if leaves and len(leaves) == len(names):
-            # しおり(ページ番号を持つ)とヘッダー欄(拡張子を持つ)の順序・件数が一致する場合のみ紐付ける
-            attachments = [AttachmentRef(name=n, start_page=leaf.start_page, end_page=leaf.end_page)
-                           for n, leaf in zip(names, leaves)]
-        else:
-            attachments = [AttachmentRef(name=n, start_page=None, end_page=None) for n in names]
+        attachments = _attachment_refs(names, attach_node)
 
         subject = header["件名"] or subject_from_title
 

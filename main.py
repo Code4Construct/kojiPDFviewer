@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 
+import pymupdf
 from PySide6.QtCore import (
     QAbstractListModel,
     QCoreApplication,
@@ -22,12 +23,14 @@ from PySide6.QtCore import (
     QRect,
     QSettings,
     QSize,
+    QSizeF,
     Qt,
     QTimer,
+    QUrl,
     Signal,
 )
-from PySide6.QtGui import QAction, QBrush, QColor, QCursor, QDragEnterEvent, QDropEvent, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut, QStandardItem, QStandardItemModel
-from PySide6.QtPdf import QPdfDocument, QPdfSearchModel
+from PySide6.QtGui import QAction, QBrush, QColor, QCursor, QDesktopServices, QDragEnterEvent, QDropEvent, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut, QStandardItem, QStandardItemModel
+from PySide6.QtPdf import QPdfDocument, QPdfLinkModel, QPdfSearchModel
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
@@ -410,8 +413,8 @@ class MailItemDelegate(QStyledItemDelegate):
                     painter.drawRoundedRect(shadow_rect, 6, 6)
                     draw_rect = chip["rect"].adjusted(0, -2, 0, -2)
 
-                bg = QColor("#CFE0FA") if is_hovered else (QColor("#E7EEFB") if clickable else QColor("#F0F1F3"))
-                fg = QColor("#12386B") if is_hovered else (QColor("#2F6FE4") if clickable else QColor("#9AA0A8"))
+                bg = QColor("#CFE0FA") if is_hovered else (QColor("#E7EEFB") if clickable else QColor("#FDE8E8"))
+                fg = QColor("#12386B") if is_hovered else (QColor("#2F6FE4") if clickable else QColor("#C62828"))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QBrush(bg))
                 painter.drawRoundedRect(draw_rect, 6, 6)
@@ -503,6 +506,31 @@ class MailListView(QListView):
         super().__init__(parent)
         self._delegate = delegate
         self.setMouseTracking(True)
+
+    def _unlinked_chip_at(self, pos) -> bool:
+        index = self.indexAt(pos)
+        if not index.isValid():
+            return False
+        mail = index.data(MAIL_ROLE)
+        if mail is None or not mail.attachments:
+            return False
+        rect = self.visualRect(index)
+        _, _, _, y = self._delegate._row_positions(rect)
+        chips, _ = self._delegate._attachment_chips(rect, mail, y)
+        return any(chip["kind"] == "attachment" and not chip["clickable"]
+                   and chip["rect"].contains(pos) for chip in chips)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._unlinked_chip_at(event.position().toPoint()):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._unlinked_chip_at(event.position().toPoint()):
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
@@ -739,6 +767,129 @@ class RatioSplitter(QSplitter):
             self.setSizes([left, total - left])
 
 
+class LinkedPdfView(QPdfView):
+    """QPdfViewのページ座標で外部リンクを拾い、既定のアプリへ渡す。"""
+
+    def __init__(self, pdf_path: str, parent=None):
+        super().__init__(parent)
+        self.pdf_path = pdf_path
+        self.link_model = QPdfLinkModel(self)
+
+    def _link_at(self, position: QPointF):
+        document = self.document()
+        if document is None or document.pageCount() == 0:
+            return None
+
+        viewport = self.viewport().size()
+        margins = self.documentMargins()
+        resolution = QApplication.primaryScreen().logicalDotsPerInch() / 72.0
+        page_sizes = []
+        for page in range(document.pageCount()):
+            points = document.pagePointSize(page)
+            base = QSizeF(points * resolution).toSize()
+            if base.width() <= 0 or base.height() <= 0:
+                return None
+            if self.zoomMode() == QPdfView.ZoomMode.FitToWidth:
+                scale = (viewport.width() - margins.left() - margins.right()) / base.width()
+                size = base * scale
+            elif self.zoomMode() == QPdfView.ZoomMode.FitInView:
+                available = QSize(viewport.width() - margins.left() - margins.right(),
+                                  viewport.height() - self.pageSpacing())
+                size = base.scaled(available, Qt.AspectRatioMode.KeepAspectRatio)
+                scale = size.width() / base.width()
+            else:
+                scale = self.zoomFactor()
+                size = QSizeF(points * resolution * scale).toSize()
+            page_sizes.append((size, resolution * scale))
+
+        width = max(size.width() for size, _ in page_sizes) + margins.left() + margins.right()
+        y = margins.top() - self.verticalScrollBar().value()
+        for page, (size, scale) in enumerate(page_sizes):
+            x = (max(width, viewport.width()) - size.width()) // 2 - self.horizontalScrollBar().value()
+            if x <= position.x() < x + size.width() and y <= position.y() < y + size.height():
+                self.link_model.setPage(page)
+                point = QPointF((position.x() - x) / scale, (position.y() - y) / scale)
+                return self.link_model.linkAt(point), page, point
+            y += size.height() + self.pageSpacing()
+        return None
+
+    def _raw_file_path(self, page: int, point: QPointF) -> str | None:
+        """PDFの元バイト列から、文字化けしたファイルリンクを復元する。"""
+        with pymupdf.open(self.pdf_path) as pdf:
+            for link in pdf[page].get_links():
+                rect = link["from"]
+                if not (rect.x0 <= point.x() <= rect.x1 and rect.y0 <= point.y() <= rect.y1):
+                    continue
+                obj = pdf.xref_object(link["xref"])
+                match = re.search(r"/(?:URI|UF|F)\s*<([0-9A-Fa-f]+)>", obj)
+                if match is not None:
+                    raw = bytes.fromhex(match.group(1))
+                else:
+                    match = re.search(r"/(?:URI|UF|F)\s*\(((?:\\.|[^\\)])*)\)", obj)
+                    if match is None:
+                        continue
+                    literal = match.group(1).encode("latin-1")
+
+                    def unescape(m):
+                        escaped = m.group(1)
+                        if escaped[:1] in (b"\r", b"\n"):
+                            return b""
+                        if escaped[:1] in b"01234567":
+                            return bytes((int(escaped, 8),))
+                        return {b"n": b"\n", b"r": b"\r", b"t": b"\t",
+                                b"b": b"\b", b"f": b"\f"}.get(escaped, escaped)
+
+                    raw = re.sub(rb"\\([0-7]{1,3}|\r?\n|.)", unescape, literal)
+                encodings = ("utf-16",) if raw.startswith((b"\xfe\xff", b"\xff\xfe")) else (
+                    "utf-8", "cp932")
+                for encoding in encodings:
+                    try:
+                        decoded = raw.decode(encoding)
+                        break
+                    except UnicodeError:
+                        continue
+                else:
+                    continue
+                if decoded.startswith("file:"):
+                    return QUrl(decoded).toLocalFile()
+                return decoded
+        return None
+
+    def _open_external_link(self, url: QUrl, page: int, point: QPointF):
+        scheme = url.scheme().lower()
+        if scheme not in ("http", "https", "mailto", "file"):
+            return
+        if scheme == "file":
+            path = url.toLocalFile()
+            if not os.path.exists(os.path.join(os.path.dirname(self.pdf_path), path)):
+                try:
+                    raw_path = self._raw_file_path(page, point)
+                except (OSError, RuntimeError, ValueError):
+                    raw_path = None
+                if raw_path:
+                    path = raw_path
+            path = path.replace("¥", "\\")
+            if not os.path.isabs(path):
+                path = os.path.join(os.path.dirname(self.pdf_path), path)
+            path = os.path.abspath(path)
+            if not os.path.exists(path):
+                QMessageBox.warning(self, "リンク先が見つかりません", path)
+                return
+            url = QUrl.fromLocalFile(path)
+        if not QDesktopServices.openUrl(url):
+            QMessageBox.warning(self, "リンクを開けません", url.toString())
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            hit = self._link_at(event.position())
+            # 外部リンクはpage=-1なので、QPdfLink.isValid()はFalseになる。
+            if hit is not None and not hit[0].url().isEmpty():
+                link, page, point = hit
+                self._open_external_link(link.url(), page, point)
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
 # --------------------------------------------------------- PDF表示・ページ送りの共通基底
 class BasePdfTab(QWidget):
     """PDF描画・ページ送り・印刷など、メール束PDF/一般資料PDFで共通する部分。"""
@@ -756,8 +907,9 @@ class BasePdfTab(QWidget):
         self.search_model = QPdfSearchModel(self)
         self.search_model.setDocument(self.document)
 
-        self.pdf_view = QPdfView()
+        self.pdf_view = LinkedPdfView(pdf_path)
         self.pdf_view.setDocument(self.document)
+        self.pdf_view.link_model.setDocument(self.document)
         self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
         self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
         self.pdf_view.setSearchModel(self.search_model)
@@ -1366,6 +1518,8 @@ class DocumentPdfTab(BasePdfTab):
     def __init__(self, pdf_path: str, parent=None):
         super().__init__(pdf_path, parent)
         self._all_rows: list[db.SectionRow] = []
+        self._display_depth = 1
+        self._max_depth = 1
         self._build_ui()
 
     def _build_ui(self):
@@ -1391,14 +1545,36 @@ class DocumentPdfTab(BasePdfTab):
         mode_button.setText("メール一覧へ")
         mode_button.clicked.connect(self._request_mode_switch)
         info_layout.addWidget(mode_button)
-        expand_button = QToolButton()
-        expand_button.setText("すべて展開")
-        expand_button.clicked.connect(lambda: self.list_view.expandAll())
-        info_layout.addWidget(expand_button)
-        collapse_button = QToolButton()
-        collapse_button.setText("折りたたむ")
-        collapse_button.clicked.connect(lambda: self.list_view.collapseAll())
-        info_layout.addWidget(collapse_button)
+        depth_group = QWidget()
+        depth_group.setObjectName("bookmarkDepthGroup")
+        depth_layout = QHBoxLayout(depth_group)
+        depth_layout.setContentsMargins(5, 4, 5, 4)
+        depth_layout.setSpacing(4)
+        self.expand_button = QToolButton()
+        self.expand_button.setText("全展開")
+        self.expand_button.clicked.connect(lambda: self._set_display_depth(self._max_depth))
+        depth_layout.addWidget(self.expand_button)
+        self.deeper_button = QToolButton()
+        self.deeper_button.setText("＋")
+        self.deeper_button.setToolTip("表示するしおりを1階層増やす")
+        self.deeper_button.clicked.connect(lambda: self._set_display_depth(self._display_depth + 1))
+        depth_layout.addWidget(self.deeper_button)
+        self.depth_label = QLabel("1")
+        self.depth_label.setObjectName("bookmarkDepth")
+        self.depth_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.depth_label.setMinimumWidth(24)
+        self.depth_label.setToolTip("表示するしおりの階層数（最上位は1）")
+        depth_layout.addWidget(self.depth_label)
+        self.shallower_button = QToolButton()
+        self.shallower_button.setText("−")
+        self.shallower_button.setToolTip("表示するしおりを1階層減らす")
+        self.shallower_button.clicked.connect(lambda: self._set_display_depth(self._display_depth - 1))
+        depth_layout.addWidget(self.shallower_button)
+        self.collapse_button = QToolButton()
+        self.collapse_button.setText("全折り")
+        self.collapse_button.clicked.connect(lambda: self._set_display_depth(1))
+        depth_layout.addWidget(self.collapse_button)
+        info_layout.addWidget(depth_group)
         left_layout.addWidget(info_bar)
 
         self.model = SectionTreeModel()
@@ -1449,6 +1625,7 @@ class DocumentPdfTab(BasePdfTab):
         if not self.db_path:
             self._all_rows = []
             self.model.set_tree([])
+            self._update_depth_controls()
             return
 
         if query:
@@ -1457,12 +1634,39 @@ class DocumentPdfTab(BasePdfTab):
         else:
             self._all_rows = db.list_sections(self.db_path)
             self.model.set_tree(self._all_rows)
-            self.list_view.expandAll()
+            self._max_depth = max((row.level for row in self._all_rows), default=1)
+            self._display_depth = min(self._display_depth, self._max_depth)
+            self._apply_display_depth()
+
+        self._update_depth_controls()
 
         if not self.model.is_empty():
             self.list_view.setCurrentIndex(self.model.index(0, 0))
         else:
             self.pdf_view.pageNavigator().jump(0, QPointF(0, 0))
+
+    def _set_display_depth(self, depth: int):
+        if self.current_query.strip() or not self._all_rows:
+            return
+        self._display_depth = min(max(1, depth), self._max_depth)
+        self._apply_display_depth()
+        self._sync_selection_to_page(self.current_page())
+        self._update_depth_controls()
+
+    def _apply_display_depth(self):
+        self.list_view.collapseAll()
+        if self._display_depth > 1:
+            # QtのexpandToDepth(0)は最上位を開き、第2階層まで表示する。
+            self.list_view.expandToDepth(self._display_depth - 2)
+
+    def _update_depth_controls(self):
+        searching = bool(self.current_query.strip())
+        available = bool(self._all_rows) and not searching
+        self.depth_label.setText("—" if searching else str(self._display_depth if self._all_rows else 0))
+        self.deeper_button.setEnabled(available and self._display_depth < self._max_depth)
+        self.shallower_button.setEnabled(available and self._display_depth > 1)
+        self.expand_button.setEnabled(available)
+        self.collapse_button.setEnabled(available)
 
     def result_count(self) -> int:
         return self.model.rowCount() if self.current_query.strip() else len(self._all_rows)
@@ -1532,12 +1736,13 @@ class DocumentPdfTab(BasePdfTab):
         if self.current_query.strip():
             return  # 検索結果のフラット表示中は、ページ追従で一覧を組み替えない
         index = self._find_index_for_page(page)
+        while index is not None and index.parent().isValid() and not self.list_view.isExpanded(index.parent()):
+            index = index.parent()
         if index is None or self.list_view.currentIndex() == index:
             return
 
         self._syncing_selection = True
         try:
-            self.list_view.expand(index.parent())
             self.list_view.setCurrentIndex(index)
             self.list_view.scrollTo(index)
         finally:
@@ -2244,6 +2449,7 @@ QStatusBar { background: #F7F8FA; color: #6B7078; }
 QListView, QTreeView { background: #FFFFFF; border: none; outline: 0; }
 QSplitter::handle { background: #E9EBEF; }
 #sortBar { background: #FBFCFD; border-bottom: 1px solid #E9EBEF; }
+#bookmarkDepthGroup { background: #EEF4FF; border: 1px solid #D8E5FA; border-radius: 8px; }
 #pageLabel { color: #2A2D33; font-weight: 600; }
 #countLabel { color: #6B7078; }
 QTabWidget::pane { border: none; }

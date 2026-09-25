@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 from parser import extract_document_sections, extract_mails
 
+MAIL_INDEX_VERSION = "2"
+
 SCHEMA = """
 CREATE TABLE meta (
     key TEXT PRIMARY KEY,
@@ -119,6 +121,8 @@ def _build(pdf_path: str, db_path: str) -> None:
             conn.execute("INSERT INTO meta(key, value) VALUES ('pdf_signature', ?)",
                          (_pdf_signature(pdf_path),))
             conn.execute("INSERT INTO meta(key, value) VALUES ('mode', 'mail')")
+            conn.execute("INSERT INTO meta(key, value) VALUES ('parser_version', ?)",
+                         (MAIL_INDEX_VERSION,))
             conn.executemany(
                 """INSERT INTO mails
                    (id, raw_title, subject, sender, sender_short, to_addr, cc, attachments, attachments_json,
@@ -187,7 +191,8 @@ def open_or_build(pdf_path: str, mode: str = "mail", force_rebuild: bool = False
         conn = sqlite3.connect(db_path)
         try:
             meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
-            if meta.get("pdf_signature") != sig or meta.get("mode", "mail") != mode:
+            if (meta.get("pdf_signature") != sig or meta.get("mode", "mail") != mode
+                    or (mode == "mail" and meta.get("parser_version") != MAIL_INDEX_VERSION)):
                 conn.close()
                 builder(pdf_path, db_path)
                 return db_path

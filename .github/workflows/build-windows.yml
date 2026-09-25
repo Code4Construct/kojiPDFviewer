@@ -66,9 +66,9 @@ jobs:
           New-Item -ItemType Directory -Force installer\obj, installer\output | Out-Null
           & $heat dir main.dist -nologo -srd -sreg -gg -cg AppFiles -dr INSTALLFOLDER -var var.SourceDir -out installer\obj\HarvestedFiles.wxs
           if ($LASTEXITCODE -ne 0) { throw 'WiX heat failed' }
-          & $candle -nologo -arch x64 "-dSourceDir=$pwd\main.dist" "-dProjectDir=$pwd" "-dAppVersion=$env:APP_VERSION" -out installer\obj\ installer\kojiPDFviewer.wxs installer\obj\HarvestedFiles.wxs
+          & $candle -nologo -arch x64 -ext WixUIExtension -ext WixUtilExtension "-dSourceDir=$pwd\main.dist" "-dProjectDir=$pwd" "-dAppVersion=$env:APP_VERSION" -out installer\obj\ installer\kojiPDFviewer.wxs installer\obj\HarvestedFiles.wxs
           if ($LASTEXITCODE -ne 0) { throw 'WiX candle failed' }
-          & $light -nologo -out "installer\output\$env:MSI_NAME" installer\obj\kojiPDFviewer.wixobj installer\obj\HarvestedFiles.wixobj
+          & $light -nologo -ext WixUIExtension -ext WixUtilExtension -out "installer\output\$env:MSI_NAME" installer\obj\kojiPDFviewer.wixobj installer\obj\HarvestedFiles.wixobj
           if ($LASTEXITCODE -ne 0) { throw 'WiX light failed' }
           if (!(Test-Path "installer\output\$env:MSI_NAME")) { throw 'MSI missing' }
       - name: Sign MSI if configured
