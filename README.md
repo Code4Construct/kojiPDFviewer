@@ -56,16 +56,16 @@ python main.py [PDFファイルパス]
 1. GitHub リポジトリの **Settings → Secrets and variables → Actions** に `VIRUSTOTAL_API_KEY` を Repository secret として登録します。公開 VirusTotal API に送った MSI は第三者にも共有され得るため、社外秘の内容は含めないでください。
 2. **Settings → Actions → General** で GitHub Actions を有効にします。Release の作成に使う `GITHUB_TOKEN` にはワークフローで `contents: write` を指定しています。組織のポリシーで書き込みが禁止されている場合は許可が必要です。
 3. コード署名をする場合は、同じ場所に `WINDOWS_CODESIGN_PFX_BASE64` (PFX ファイルの Base64) と `WINDOWS_CODESIGN_PASSWORD` を両方登録します。これで exe と MSI に署名します。未設定なら署名せず、片方だけ設定した場合はビルドを停止します。
-4. `VERSION` を `0.2.0` のような 3 桁の番号にし、変更をコミットして `master` に push します。
+4. `VERSION` を `0.3.0` のような 3 桁の番号にし、変更をコミットして `master` に push します。
 
 ```powershell
 git add .
-git commit -m "Prepare v0.2.0 release"
+git commit -m "Prepare v0.3.0 release"
 git push origin HEAD
 ```
 
 1. GitHub の **Actions → Build kojiPDFviewer MSI** で push による実行が成功したことを確認します。Artifacts の `windows-msi` から `kojiPDFviewer_Setup_<VERSION>.msi` をダウンロードし、インストール・起動を確認します。
-2. **Actions → Release kojiPDFviewer MSI → Run workflow** を開き、`master` を選んでリリース名を入力します。例: `kojiPDFviewer v0.2.0`。緑色の **Run workflow** を押します。
+2. **Actions → Release kojiPDFviewer MSI → Run workflow** を開き、`master` を選んでリリース名を入力します。例: `kojiPDFviewer v0.3.0`。緑色の **Run workflow** を押します。
 3. Release Action が同じコミットの成功した MSI を再利用し、VirusTotal 確認後に `v<VERSION>` タグと GitHub Release を作成します。手動でタグを push する必要はありません。
 
 Release Action の開始前に新しいコミットを push した場合は、そのコミットのビルドが成功するまで待ちます。同じ版のタグが既にある場合は公開を止めるため、次回の配布時には先に `VERSION` を増やしてください。ビルド artifact の保存期間は 30 日です。MSI は管理者権限で全ユーザー向けにインストールされ、スタートメニューとデスクトップにショートカットを作成します。

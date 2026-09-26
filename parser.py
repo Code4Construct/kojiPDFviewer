@@ -44,6 +44,7 @@ class TocNode:
     start_page: int
     page_count: int
     children: list["TocNode"] = field(default_factory=list)
+    toc_index: int = -1
 
     @property
     def end_page(self) -> int:
@@ -91,6 +92,10 @@ class Mail:
     end_page: int
     body_text: str
     preview: str
+    toc_index: int = -1
+    parent_toc_index: int | None = None
+    level: int = 1
+    is_mail: bool = True
 
 
 def _split_toc_title(title: str) -> tuple[str, int, int]:
@@ -108,10 +113,10 @@ def build_toc_tree(doc: pymupdf.Document) -> list[TocNode]:
     roots: list[TocNode] = []
     stack: list[TocNode] = []  # インデックス0 = level1の直近ノード
 
-    for level, title, _page, _extra in toc:
+    for toc_index, (level, title, _page, _extra) in enumerate(toc):
         name, start_page, page_count = _split_toc_title(title)
         node = TocNode(level=level, raw_title=title, name=name,
-                        start_page=start_page, page_count=page_count)
+                        start_page=start_page, page_count=page_count, toc_index=toc_index)
         while len(stack) >= level:
             stack.pop()
         if stack:
@@ -267,57 +272,59 @@ def _parse_title_datetime(name: str) -> tuple[datetime | None, str]:
 
 def extract_mails(pdf_path: str) -> list[Mail]:
     doc = pymupdf.open(pdf_path)
-    roots = build_toc_tree(doc)
+    try:
+        roots = build_toc_tree(doc)
+        sections = extract_document_sections(pdf_path, include_body=False)
+        next_id = len(roots)
+        mails: list[Mail] = []
 
-    mails: list[Mail] = []
-    for i, node in enumerate(roots):
-        dt, subject_from_title = _parse_title_datetime(node.name)
+        def visit(node: TocNode, parent_toc_index: int | None, row_id: int):
+            nonlocal next_id
+            section = sections[node.toc_index]
+            start_page, end_page = (node.start_page, node.end_page) if _title_matches_mail_pattern(node.raw_title) else (section.start_page, section.end_page)
+            header = (_parse_header_fields(doc[start_page - 1].get_text())
+                      if 1 <= start_page <= doc.page_count else {key: "" for key in LABELS})
+            is_mail = node.level == 1 or (_title_matches_mail_pattern(node.raw_title)
+                and not any(word in node.name for word in ("本文", "添付フォルダ")) and sum(
+                bool(header[key]) for key in ("件名", "差出人", "受信日時")) >= 2)
+            dt, subject_from_title = _parse_title_datetime(node.name)
+            body_node = _find_child(node, "本文") if is_mail else None
+            body_start, body_end = ((body_node.start_page, body_node.end_page)
+                                    if body_node else (start_page, end_page))
+            body_start, body_end = max(1, body_start), min(doc.page_count, body_end)
+            body_text = "" if not is_mail and node.children else "\n".join(
+                doc[p - 1].get_text() for p in range(body_start, body_end + 1))
+            attach_node = _find_child(node, "添付") if is_mail else None
+            if is_mail and header["添付ファイル"]:
+                names = [a.strip() for a in header["添付ファイル"].split("/") if a.strip()]
+            elif attach_node is not None:
+                names = _collect_leaf_names(attach_node)
+            else:
+                names = []
+            mails.append(Mail(
+                index=row_id, raw_title=node.raw_title,
+                subject=(header["件名"] or subject_from_title) if is_mail else section.title,
+                sent_date_from_title=dt if is_mail else None,
+                sender=header["差出人"] if is_mail else "",
+                sender_short=_short_name(header["差出人"]) if is_mail else "",
+                to=header["宛先"] if is_mail else "", cc=header["CC"] if is_mail else "",
+                attachments=_attachment_refs(names, attach_node) if is_mail else [],
+                received_at=header["受信日時"] if is_mail else "",
+                sent_at=header["送信日時"] if is_mail else "",
+                start_page=start_page, end_page=end_page, body_text=body_text,
+                preview=_extract_preview(body_text), toc_index=node.toc_index,
+                parent_toc_index=parent_toc_index, level=node.level, is_mail=is_mail,
+            ))
+            for child in node.children:
+                child_id = next_id
+                next_id += 1
+                visit(child, node.toc_index, child_id)
 
-        header = _parse_header_fields(doc[node.start_page - 1].get_text())
-
-        body_node = _find_child(node, "本文")
-        if body_node is not None:
-            body_start, body_end = body_node.start_page, body_node.end_page
-        else:
-            body_start, body_end = node.start_page, node.end_page
-
-        body_text = "\n".join(
-            doc[p - 1].get_text() for p in range(body_start, body_end + 1)
-        )
-
-        attach_node = _find_child(node, "添付")
-        if header["添付ファイル"]:
-            # ヘッダー欄は拡張子付きファイル名を持つため、しおり名より優先する。
-            names = [a.strip() for a in header["添付ファイル"].split("/") if a.strip()]
-        elif attach_node is not None:
-            names = _collect_leaf_names(attach_node)
-        else:
-            names = []
-
-        attachments = _attachment_refs(names, attach_node)
-
-        subject = header["件名"] or subject_from_title
-
-        mails.append(Mail(
-            index=i,
-            raw_title=node.raw_title,
-            subject=subject,
-            sent_date_from_title=dt,
-            sender=header["差出人"],
-            sender_short=_short_name(header["差出人"]),
-            to=header["宛先"],
-            cc=header["CC"],
-            attachments=attachments,
-            received_at=header["受信日時"],
-            sent_at=header["送信日時"],
-            start_page=node.start_page,
-            end_page=node.end_page,
-            body_text=body_text,
-            preview=_extract_preview(body_text),
-        ))
-
-    doc.close()
-    return mails
+        for i, root in enumerate(roots):
+            visit(root, None, i)
+        return mails
+    finally:
+        doc.close()
 
 
 # --------------------------------------------------------- 一般資料PDF(しおり階層閲覧)
@@ -353,7 +360,7 @@ def detect_mode(pdf_path: str) -> str:
         doc.close()
 
 
-def extract_document_sections(pdf_path: str) -> list[DocSection]:
+def extract_document_sections(pdf_path: str, include_body: bool = True) -> list[DocSection]:
     """しおり(TOC)を階層構造のまま「資料の区切り」として抽出する。
 
     メールPDFの命名規則には依存せず、しおりが指す実際のページ番号と、
@@ -398,7 +405,7 @@ def extract_document_sections(pdf_path: str) -> list[DocSection]:
                 has_child[s.parent_index] = True
 
         for i, s in enumerate(sections):
-            if not has_child[i]:
+            if include_body and not has_child[i]:
                 s.body_text = "\n".join(doc[p - 1].get_text() for p in range(s.start_page, s.end_page + 1))
 
         return sections

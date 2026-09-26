@@ -155,6 +155,11 @@ class MailListModel(QAbstractListModel):
             groups: dict[str, MailGroupHeader] = {}
             order: list[str] = []
             for row in self._all_rows:
+                if not row.is_mail:
+                    order.append(f"__document_{row.id}")
+                    groups[f"__document_{row.id}"] = MailGroupHeader(f"__document_{row.id}", row.subject)
+                    groups[f"__document_{row.id}"].mails.append(row)
+                    continue
                 key = parser.normalize_subject(row.subject)
                 header = groups.get(key)
                 if header is None:
@@ -251,7 +256,7 @@ class MailListModel(QAbstractListModel):
             self.dataChanged.emit(idx, idx, [MAIL_ROLE])
 
     def unread_count(self) -> int:
-        return sum(1 for row in self._all_rows if not row.is_read)
+        return sum(1 for row in self._all_rows if row.is_mail and not row.is_read)
 
 
 # --------------------------------------------------------------- デリゲート
@@ -327,6 +332,24 @@ class MailItemDelegate(QStyledItemDelegate):
         if mail is None:
             return super().paint(painter, option, index)
 
+        if not mail.is_mail:
+            painter.save()
+            rect = option.rect
+            painter.fillRect(rect, QColor("#E4EDFC") if option.state & QStyle.StateFlag.State_Selected else QColor("#FFFFFF"))
+            painter.setPen(QColor("#E9EBEF"))
+            painter.drawLine(rect.left() + 20, rect.bottom(), rect.right() - 20, rect.bottom())
+            painter.setPen(QColor("#315E91"))
+            title_font = QFont(); title_font.setPointSize(10); title_font.setBold(True)
+            painter.setFont(title_font)
+            title_rect = rect.adjusted(18, 14, -18, -55)
+            painter.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter,
+                             QFontMetrics(title_font).elidedText(mail.subject, Qt.TextElideMode.ElideRight, title_rect.width()))
+            painter.setPen(QColor("#6B7078"))
+            detail = f"資料  ·  {mail.start_page}–{mail.end_page} ページ"
+            painter.drawText(rect.adjusted(18, 52, -18, -20), Qt.AlignmentFlag.AlignVCenter, detail)
+            painter.restore()
+            return
+
         painter.save()
         painter.setRenderHint(painter.RenderHint.Antialiasing)
         rect = option.rect
@@ -344,7 +367,7 @@ class MailItemDelegate(QStyledItemDelegate):
         painter.setPen(QColor("#E9EBEF"))
         painter.drawLine(rect.left() + 20, rect.bottom(), rect.right() - 20, rect.bottom())
 
-        if not mail.is_read:
+        if mail.is_mail and not mail.is_read:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor("#2F6FE4")))
             painter.drawEllipse(QRect(rect.left() + 6, rect.top() + rect.height() // 2 - 4, 8, 8))
@@ -767,6 +790,74 @@ class RatioSplitter(QSplitter):
             self.setSizes([left, total - left])
 
 
+class PageNumberControl(QWidget):
+    """1始まりのページ入力と総ページ数表示を共有する。"""
+
+    page_requested = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current = -1
+        self._total = 0
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
+        self.input = QLineEdit("-")
+        self.input.setObjectName("pageNumberInput")
+        self.input.setFixedWidth(54)
+        self.input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input.setToolTip("ページ番号を入力してEnterで移動 (Ctrl+G)")
+        self.input.returnPressed.connect(self._submit)
+        self.input.textEdited.connect(self._clear_error)
+        self.input.installEventFilter(self)
+        layout.addWidget(self.input)
+        self.total_label = QLabel("/ -")
+        layout.addWidget(self.total_label)
+        self.input.setEnabled(False)
+
+    def set_page(self, current: int, total: int):
+        self._current, self._total = current, total
+        self.total_label.setText(f"/ {total}" if total > 0 else "/ -")
+        self.input.setEnabled(total > 0)
+        if not self.input.hasFocus():
+            self._restore_text()
+
+    def focus_input(self):
+        if self._total > 0:
+            self.input.setFocus()
+            self.input.selectAll()
+
+    def cancel(self):
+        self._restore_text()
+        self.input.clearFocus()
+
+    def _restore_text(self):
+        self._clear_error()
+        self.input.setText(str(self._current + 1) if self._total > 0 else "-")
+
+    def _clear_error(self, *_args):
+        self.input.setStyleSheet("")
+        self.input.setToolTip("ページ番号を入力してEnterで移動 (Ctrl+G)")
+
+    def _submit(self):
+        value = self.input.text().strip()
+        if not value.isdecimal() or not 1 <= int(value) <= self._total:
+            self.input.setStyleSheet("border: 1px solid #C62828;")
+            self.input.setToolTip(f"1〜{self._total} のページ番号を入力してください")
+            return
+        self.page_requested.emit(int(value))
+        self.cancel()
+
+    def eventFilter(self, watched, event):
+        if watched is self.input:
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                self.cancel()
+                return True
+            if event.type() == QEvent.Type.FocusOut:
+                self._restore_text()
+        return super().eventFilter(watched, event)
+
+
 class LinkedPdfView(QPdfView):
     """QPdfViewのページ座標で外部リンクを拾い、既定のアプリへ渡す。"""
 
@@ -1076,6 +1167,8 @@ class PageRangeWindow(QMainWindow):
         prev_shortcut.activated.connect(self.go_prev_page)
         next_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
         next_shortcut.activated.connect(self.go_next_page)
+        page_shortcut = QShortcut(QKeySequence("Ctrl+G"), self)
+        page_shortcut.activated.connect(self.page_control.focus_input)
 
     def _build_toolbar(self):
         toolbar = QToolBar()
@@ -1097,10 +1190,9 @@ class PageRangeWindow(QMainWindow):
         self.prev_page_button.clicked.connect(self.go_prev_page)
         toolbar.addWidget(self.prev_page_button)
 
-        self.page_label = QLabel("- / -")
-        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.page_label.setMinimumWidth(70)
-        toolbar.addWidget(self.page_label)
+        self.page_control = PageNumberControl()
+        self.page_control.page_requested.connect(self._go_to_page)
+        toolbar.addWidget(self.page_control)
 
         self.next_page_button = QToolButton()
         self.next_page_button.setText("▶")
@@ -1141,10 +1233,14 @@ class PageRangeWindow(QMainWindow):
         if nav.currentPage() < self.document.pageCount() - 1:
             nav.jump(nav.currentPage() + 1, QPointF(0, 0))
 
+    def _go_to_page(self, page_number: int):
+        if 1 <= page_number <= self.document.pageCount():
+            self.pdf_view.pageNavigator().jump(page_number - 1, QPointF(0, 0))
+
     def _update_page_bar(self, *_args):
         total = self.document.pageCount()
         current = self.pdf_view.pageNavigator().currentPage() if total > 0 else -1
-        self.page_label.setText(f"{current + 1} / {total}" if total > 0 else "- / -")
+        self.page_control.set_page(current, total)
         self.prev_page_button.setEnabled(total > 0 and current > 0)
         self.next_page_button.setEnabled(total > 0 and current < total - 1)
 
@@ -1190,6 +1286,8 @@ class PdfTab(BasePdfTab):
         self.sort_key = "date"
         self.sort_descending = True
         self.group_by_subject = False
+        self.scope_toc_index: int | None = None
+        self.include_descendants = False
 
         self._build_ui()
 
@@ -1243,6 +1341,23 @@ class PdfTab(BasePdfTab):
         self._update_sort_dir_label()
         left_layout.addWidget(sort_bar)
 
+        scope_bar = QWidget()
+        scope_layout = QHBoxLayout(scope_bar)
+        scope_layout.setContentsMargins(12, 4, 12, 6)
+        scope_layout.addWidget(QLabel("対象:"))
+        self.scope_combo = QComboBox()
+        self.scope_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.scope_combo.setMinimumContentsLength(18)
+        self.scope_combo.addItem("PDF全体（ルート）", None)
+        self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
+        scope_layout.addWidget(self.scope_combo, 1)
+        self.range_combo = QComboBox()
+        self.range_combo.addItem("直下のみ", False)
+        self.range_combo.addItem("配下すべて", True)
+        self.range_combo.currentIndexChanged.connect(self._on_scope_changed)
+        scope_layout.addWidget(self.range_combo)
+        left_layout.addWidget(scope_bar)
+
         self.model = MailListModel()
         self.item_delegate = MailItemDelegate()
         self.item_delegate.attachment_clicked.connect(self._on_attachment_clicked)
@@ -1282,13 +1397,14 @@ class PdfTab(BasePdfTab):
             return False
 
         self.document.load(self.pdf_path)
-        self.refresh_list()
+        self._populate_scopes()
         self.page_changed.emit()
         return True
 
     def refresh_list(self):
         rows = (
-            db.search(self.db_path, self.current_query, self.sort_key, self.sort_descending)
+            db.list_scoped(self.db_path, self.current_query, self.sort_key, self.sort_descending,
+                           self.scope_toc_index, self.include_descendants)
             if self.db_path else []
         )
         self.model.set_rows(rows, grouped=self.group_by_subject)
@@ -1298,6 +1414,43 @@ class PdfTab(BasePdfTab):
             self.list_view.setCurrentIndex(first)
         else:
             self.pdf_view.pageNavigator().jump(0, QPointF(0, 0))
+
+    def _populate_scopes(self):
+        self.scope_combo.blockSignals(True)
+        self.scope_combo.clear()
+        self.scope_combo.addItem("PDF全体（ルート）", None)
+        path: list[str] = []
+        for toc_index, level, title in db.list_scope_options(self.db_path):
+            path = path[:level - 1]
+            path.append(title)
+            label = "  " * (level - 1) + title
+            self.scope_combo.addItem(label, toc_index)
+            self.scope_combo.setItemData(self.scope_combo.count() - 1,
+                                         " › ".join(path),
+                                         Qt.ItemDataRole.ToolTipRole)
+        self.scope_combo.blockSignals(False)
+        self.set_scope(self.scope_toc_index, self.include_descendants)
+
+    def set_scope(self, toc_index: int | None, include_descendants: bool = False):
+        self.scope_toc_index = toc_index
+        self.include_descendants = include_descendants
+        index = self.scope_combo.findData(toc_index)
+        self.scope_combo.blockSignals(True)
+        self.scope_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.scope_combo.blockSignals(False)
+        self.range_combo.blockSignals(True)
+        self.range_combo.setCurrentIndex(1 if include_descendants else 0)
+        self.range_combo.setEnabled(toc_index is not None)
+        self.range_combo.blockSignals(False)
+        if self.db_path:
+            self.refresh_list()
+
+    def _on_scope_changed(self, *_args):
+        self.scope_toc_index = self.scope_combo.currentData()
+        self.include_descendants = bool(self.range_combo.currentData())
+        self.range_combo.setEnabled(self.scope_toc_index is not None)
+        if self.db_path:
+            self.refresh_list()
 
     def _update_count_label(self):
         self.count_label.setText(f"{len(self.model.all_rows())} 件")
@@ -1357,7 +1510,8 @@ class PdfTab(BasePdfTab):
         mail = self.model.mail_at(index.row())
         if mail is None:
             return
-        self._mark_read(mail)
+        if mail.is_mail:
+            self._mark_read(mail)
         self.pdf_view.pageNavigator().jump(mail.start_page - 1, QPointF(0, 0))
 
     def _on_index_double_clicked(self, index: QModelIndex):
@@ -1366,7 +1520,8 @@ class PdfTab(BasePdfTab):
         mail = self.model.mail_at(index.row())
         if mail is None:
             return
-        self._mark_read(mail)
+        if mail.is_mail:
+            self._mark_read(mail)
         self._open_mail_window(mail)
 
     def _on_attachment_clicked(self, index: QModelIndex, start_page: int):
@@ -1380,6 +1535,8 @@ class PdfTab(BasePdfTab):
         QTimer.singleShot(0, lambda: self.pdf_view.pageNavigator().jump(start_page - 1, QPointF(0, 0)))
 
     def _mark_read(self, mail: "db.MailRow", read: bool = True):
+        if not mail.is_mail:
+            return
         if mail.is_read == read:
             return
         db.set_read(self.db_path, mail.id, read)
@@ -1400,15 +1557,16 @@ class PdfTab(BasePdfTab):
         self.list_view.setCurrentIndex(index)
 
         menu = QMenu(self)
-        read_action = menu.addAction("未読にする" if mail.is_read else "既読にする")
-        read_action.triggered.connect(lambda: self._mark_read(mail, not mail.is_read))
-        menu.addSeparator()
+        if mail.is_mail:
+            read_action = menu.addAction("未読にする" if mail.is_read else "既読にする")
+            read_action.triggered.connect(lambda: self._mark_read(mail, not mail.is_read))
+            menu.addSeparator()
 
-        reply_action = menu.addAction("\U0001F4E7 Outlookで返信を作成...")
-        reply_action.triggered.connect(lambda: self._create_outlook_reply(mail, reply_all=False))
-        reply_all_action = menu.addAction("\U0001F4E7 Outlookで全員に返信を作成...")
-        reply_all_action.triggered.connect(lambda: self._create_outlook_reply(mail, reply_all=True))
-        menu.addSeparator()
+            reply_action = menu.addAction("\U0001F4E7 Outlookで返信を作成...")
+            reply_action.triggered.connect(lambda: self._create_outlook_reply(mail, reply_all=False))
+            reply_all_action = menu.addAction("\U0001F4E7 Outlookで全員に返信を作成...")
+            reply_all_action.triggered.connect(lambda: self._create_outlook_reply(mail, reply_all=True))
+            menu.addSeparator()
 
         window_action = menu.addAction("\U0001F5D4 別ウインドウで開く")
         window_action.triggered.connect(lambda: self._open_mail_window(mail))
@@ -1416,9 +1574,10 @@ class PdfTab(BasePdfTab):
 
         page_range = f"{mail.start_page}" if mail.start_page == mail.end_page else f"{mail.start_page}-{mail.end_page}"
         mail_name = f"{mail.subject or '(件名なし)'}"
-        mail_action = menu.addAction(f"\U0001F5A8 このメールを印刷... ({page_range}ページ)")
+        noun = "メール" if mail.is_mail else "資料"
+        mail_action = menu.addAction(f"\U0001F5A8 この{noun}を印刷... ({page_range}ページ)")
         mail_action.triggered.connect(lambda: self.print_page_range(mail.start_page, mail.end_page))
-        save_action = menu.addAction(f"\U0001F4BE このメールをPDFで保存... ({page_range}ページ)")
+        save_action = menu.addAction(f"\U0001F4BE この{noun}をPDFで保存... ({page_range}ページ)")
         save_action.triggered.connect(
             lambda: self.save_page_range(mail.start_page, mail.end_page, mail_name))
 
@@ -1443,7 +1602,8 @@ class PdfTab(BasePdfTab):
         window = self.window()
         if not isinstance(window, MainWindow):
             return
-        title = f"{mail.sender_short or '(差出人不明)'} - {mail.subject or '(件名なし)'}"
+        title = (f"{mail.sender_short or '(差出人不明)'} - {mail.subject or '(件名なし)'}"
+                 if mail.is_mail else mail.subject)
         window.open_page_range_window(title, self.pdf_path, mail.start_page, mail.end_page,
                                        attachments=mail.attachment_list())
 
@@ -1462,7 +1622,8 @@ class PdfTab(BasePdfTab):
             return
         db.mark_all_read(self.db_path, True)
         for row in self.model.all_rows():
-            row.is_read = True
+            if row.is_mail:
+                row.is_read = True
         count = self.model.rowCount()
         if count:
             self.model.dataChanged.emit(self.model.index(0, 0), self.model.index(count - 1, 0), [MAIL_ROLE])
@@ -1520,6 +1681,7 @@ class DocumentPdfTab(BasePdfTab):
         self._all_rows: list[db.SectionRow] = []
         self._display_depth = 1
         self._max_depth = 1
+        self._chosen_scope_id: int | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -1543,7 +1705,7 @@ class DocumentPdfTab(BasePdfTab):
         info_layout.addStretch(1)
         mode_button = QToolButton()
         mode_button.setText("メール一覧へ")
-        mode_button.clicked.connect(self._request_mode_switch)
+        mode_button.clicked.connect(self._request_scoped_mail)
         info_layout.addWidget(mode_button)
         depth_group = QWidget()
         depth_group.setObjectName("bookmarkDepthGroup")
@@ -1679,6 +1841,7 @@ class DocumentPdfTab(BasePdfTab):
         section = self.model.section_at(index)
         if section is None:
             return
+        self._chosen_scope_id = section.id
         self.pdf_view.pageNavigator().jump(section.start_page - 1, QPointF(0, 0))
 
     def _on_index_double_clicked(self, index: QModelIndex):
@@ -1699,6 +1862,11 @@ class DocumentPdfTab(BasePdfTab):
             return
 
         menu = QMenu(self)
+        scope_action = menu.addAction("このしおりの直下をメール一覧で表示")
+        scope_action.triggered.connect(lambda: self._request_scoped_mail(section.id))
+        all_action = menu.addAction("このしおりの配下すべてをメール一覧で表示")
+        all_action.triggered.connect(lambda: self._request_scoped_mail(section.id, True))
+        menu.addSeparator()
         page_range = (f"{section.start_page}" if section.start_page == section.end_page
                       else f"{section.start_page}-{section.end_page}")
 
@@ -1712,6 +1880,17 @@ class DocumentPdfTab(BasePdfTab):
         save_action.triggered.connect(
             lambda: self.save_page_range(section.start_page, section.end_page, section.title))
         menu.exec(self.list_view.viewport().mapToGlobal(pos))
+
+    def _request_scoped_mail(self, section_id: int | None = None, include_descendants: bool = False):
+        # QToolButton.clicked passes a boolean; use the current tree selection for that path.
+        if isinstance(section_id, bool):
+            section_id = None
+        if section_id is None:
+            section = self.model.section_at(self.list_view.currentIndex())
+            section_id = self._chosen_scope_id if self._chosen_scope_id is not None else (section.id if section else None)
+        window = self.window()
+        if isinstance(window, MainWindow):
+            window._switch_current_mode(section_id, include_descendants)
 
     def _open_section_window(self, section: "db.SectionRow"):
         window = self.window()
@@ -2032,11 +2211,9 @@ class MainWindow(QMainWindow):
         self.prev_page_button.clicked.connect(self.go_prev_page)
         toolbar.addWidget(self.prev_page_button)
 
-        self.page_label = QLabel("- / -")
-        self.page_label.setObjectName("pageLabel")
-        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.page_label.setMinimumWidth(70)
-        toolbar.addWidget(self.page_label)
+        self.page_control = PageNumberControl()
+        self.page_control.page_requested.connect(self._go_to_page)
+        toolbar.addWidget(self.page_control)
 
         self.next_page_button = QToolButton()
         self.next_page_button.setText("▶")
@@ -2055,6 +2232,8 @@ class MainWindow(QMainWindow):
 
         find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         find_shortcut.activated.connect(lambda: (self.search_box.setFocus(), self.search_box.selectAll()))
+        page_shortcut = QShortcut(QKeySequence("Ctrl+G"), self)
+        page_shortcut.activated.connect(self.page_control.focus_input)
 
         # 全画面表示中はツールバー(search_boxの置き場所)ごと非表示になるため、search_box
         # ではなくウィンドウ直付けのQShortcutにする(F11と同じ理由)。
@@ -2254,7 +2433,7 @@ class MainWindow(QMainWindow):
     def _current_tab(self) -> "BasePdfTab | WelcomeWidget | None":
         return self.tabs.currentWidget()
 
-    def _switch_current_mode(self):
+    def _switch_current_mode(self, scope_toc_index: int | None = None, include_descendants: bool = False):
         old_tab = self._current_tab()
         if not isinstance(old_tab, BasePdfTab):
             return
@@ -2266,6 +2445,9 @@ class MainWindow(QMainWindow):
             new_tab.document.close()
             new_tab.deleteLater()
             return
+
+        if isinstance(new_tab, PdfTab):
+            new_tab.set_scope(scope_toc_index, include_descendants)
 
         page = old_tab.current_page()
         index = self.tabs.indexOf(old_tab)
@@ -2284,6 +2466,7 @@ class MainWindow(QMainWindow):
         return f" (未読 {count})" if count else ""
 
     def _on_current_tab_changed(self, _index: int):
+        self.page_control.cancel()
         if self._page_synced_tab is not None:
             try:
                 self._page_synced_tab.page_changed.disconnect(self._update_page_bar)
@@ -2330,13 +2513,13 @@ class MainWindow(QMainWindow):
     def _update_page_bar(self):
         tab = self._current_tab()
         if not isinstance(tab, BasePdfTab):
-            self.page_label.setText("- / -")
+            self.page_control.set_page(-1, 0)
             self.prev_page_button.setEnabled(False)
             self.next_page_button.setEnabled(False)
             return
         total = tab.page_count()
         current = tab.current_page() if total > 0 else -1
-        self.page_label.setText(f"{current + 1} / {total}" if total > 0 else "- / -")
+        self.page_control.set_page(current, total)
         self.prev_page_button.setEnabled(total > 0 and current > 0)
         self.next_page_button.setEnabled(total > 0 and current < total - 1)
 
@@ -2367,9 +2550,16 @@ class MainWindow(QMainWindow):
         if isinstance(tab, BasePdfTab):
             tab.go_next_page()
 
+    def _go_to_page(self, page_number: int):
+        tab = self._current_tab()
+        if isinstance(tab, BasePdfTab) and 1 <= page_number <= tab.page_count():
+            tab.pdf_view.pageNavigator().jump(page_number - 1, QPointF(0, 0))
+
     def _on_escape_pressed(self):
         """全画面表示中はEscで解除、それ以外は検索ボックスをクリアする。"""
-        if self.isFullScreen():
+        if self.page_control.input.hasFocus():
+            self.page_control.cancel()
+        elif self.isFullScreen():
             self.fullscreen_action.setChecked(False)
         else:
             self.search_box.clear()
@@ -2458,9 +2648,20 @@ QTabBar::tab:selected { background: #FFFFFF; border: 1px solid #E9EBEF; border-b
 """
 
 
+def _set_application_icon(app: QApplication):
+    """Python実行とstandaloneで同じアイコンをQtの各ウィンドウに設定する。"""
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "assets", "icons", "kojiPDFviewer.ico")
+    if os.path.isfile(icon_path):
+        icon = QIcon(icon_path)
+        if not icon.isNull():
+            app.setWindowIcon(icon)
+
+
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("kojiPDFviewer")
+    _set_application_icon(app)
     app.setStyleSheet(APP_STYLESHEET)
     win = MainWindow()
     win.showMaximized()

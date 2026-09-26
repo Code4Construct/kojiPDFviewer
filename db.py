@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from parser import extract_document_sections, extract_mails
 
-MAIL_INDEX_VERSION = "2"
+MAIL_INDEX_VERSION = "3"
 
 SCHEMA = """
 CREATE TABLE meta (
@@ -37,7 +37,11 @@ CREATE TABLE mails (
     end_page INTEGER,
     body_text TEXT,
     preview TEXT,
-    is_read INTEGER NOT NULL DEFAULT 0
+    is_read INTEGER NOT NULL DEFAULT 0,
+    toc_index INTEGER,
+    parent_toc_index INTEGER,
+    level INTEGER NOT NULL DEFAULT 1,
+    is_mail INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE VIRTUAL TABLE mails_fts USING fts5(
@@ -126,8 +130,9 @@ def _build(pdf_path: str, db_path: str) -> None:
             conn.executemany(
                 """INSERT INTO mails
                    (id, raw_title, subject, sender, sender_short, to_addr, cc, attachments, attachments_json,
-                    received_at, sent_at, title_datetime, start_page, end_page, body_text, preview, is_read)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    received_at, sent_at, title_datetime, start_page, end_page, body_text, preview, is_read,
+                    toc_index, parent_toc_index, level, is_mail)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [
                     (
                         m.index, m.raw_title, m.subject, m.sender, m.sender_short, m.to, m.cc,
@@ -138,6 +143,8 @@ def _build(pdf_path: str, db_path: str) -> None:
                         m.sent_date_from_title.isoformat() if m.sent_date_from_title else "",
                         m.start_page, m.end_page, m.body_text, m.preview,
                         1 if m.index in read_ids else 0,
+                        getattr(m, "toc_index", m.index), getattr(m, "parent_toc_index", None),
+                        getattr(m, "level", 1), 1 if getattr(m, "is_mail", True) else 0,
                     )
                     for m in mails
                 ],
@@ -238,6 +245,10 @@ class MailRow:
     end_page: int
     preview: str
     is_read: bool = False
+    toc_index: int = -1
+    parent_toc_index: int | None = None
+    level: int = 1
+    is_mail: bool = True
 
     def attachment_list(self) -> list[AttachmentInfo]:
         if not self.attachments_json:
@@ -247,15 +258,17 @@ class MailRow:
 
 
 _COLUMNS = ("id, subject, sender, sender_short, to_addr, cc, attachments, attachments_json, "
-            "received_at, sent_at, title_datetime, start_page, end_page, preview, is_read")
+            "received_at, sent_at, title_datetime, start_page, end_page, preview, is_read, "
+            "toc_index, parent_toc_index, level, is_mail")
 
 # UIから選べる並び替えキー。値はDBの実カラム名(SQLインジェクション対策のためホワイトリスト管理)。
 SORT_COLUMNS = {"date": "title_datetime", "subject": "subject", "sender": "sender_short"}
 
 
 def _row_to_mail(row) -> MailRow:
-    *rest, is_read = row
-    return MailRow(*rest, is_read=bool(is_read))
+    *rest, is_read, toc_index, parent_toc_index, level, is_mail = row
+    return MailRow(*rest, is_read=bool(is_read), toc_index=toc_index,
+                   parent_toc_index=parent_toc_index, level=level, is_mail=bool(is_mail))
 
 
 def _order_by(sort_key: str, descending: bool, prefix: str = "") -> str:
@@ -273,6 +286,47 @@ def list_all(db_path: str, sort_key: str = "date", descending: bool = True) -> l
     finally:
         conn.close()
     return [_row_to_mail(r) for r in rows]
+
+
+def list_scoped(db_path: str, query: str, sort_key: str, descending: bool,
+                scope_toc_index: int | None, include_descendants: bool) -> list[MailRow]:
+    """しおり位置で絞る。ルートは従来どおり第1階層だけを返す。"""
+    all_rows = list_all(db_path)
+    if scope_toc_index is None:
+        allowed = {row.toc_index for row in all_rows if row.level == 1}
+    else:
+        parents = {row.toc_index: row.parent_toc_index for row in all_rows}
+        if scope_toc_index not in parents:
+            return []
+        allowed = set()
+        for row in all_rows:
+            parent = row.parent_toc_index
+            if not include_descendants:
+                if parent == scope_toc_index:
+                    allowed.add(row.toc_index)
+            else:
+                while parent is not None:
+                    if parent == scope_toc_index:
+                        allowed.add(row.toc_index)
+                        break
+                    parent = parents.get(parent)
+    rows = search(db_path, query, sort_key, descending) if query.strip() else list_all(db_path, sort_key, descending)
+    return [row for row in rows if row.toc_index in allowed]
+
+
+def list_scope_options(db_path: str) -> list[tuple[int, int, str]]:
+    """TOC順の対象選択肢 (toc_index, level, title)。"""
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute("SELECT toc_index, level, raw_title FROM mails ORDER BY toc_index").fetchall()
+    finally:
+        conn.close()
+    result = []
+    for toc_index, level, raw_title in rows:
+        parts = raw_title.rsplit("_", 2)
+        title = parts[0] if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit() else raw_title
+        result.append((toc_index, level, title))
+    return result
 
 
 def _fts_query(raw: str) -> str:
@@ -337,7 +391,7 @@ def mark_all_read(db_path: str, read: bool = True) -> None:
     conn = sqlite3.connect(db_path)
     try:
         with conn:
-            conn.execute("UPDATE mails SET is_read=?", (1 if read else 0,))
+            conn.execute("UPDATE mails SET is_read=? WHERE is_mail=1", (1 if read else 0,))
     finally:
         conn.close()
 
@@ -345,7 +399,7 @@ def mark_all_read(db_path: str, read: bool = True) -> None:
 def count_unread(db_path: str) -> int:
     conn = sqlite3.connect(db_path)
     try:
-        row = conn.execute("SELECT COUNT(*) FROM mails WHERE is_read=0").fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM mails WHERE is_mail=1 AND is_read=0").fetchone()
     finally:
         conn.close()
     return row[0] if row else 0
